@@ -33,6 +33,7 @@ import org.elasticsearch.action.admin.indices.delete.DeleteIndexResponse;
 import org.elasticsearch.action.admin.indices.flush.FlushRequest;
 import org.elasticsearch.action.admin.indices.flush.FlushResponse;
 import org.elasticsearch.action.admin.indices.get.GetIndexRequest;
+import org.elasticsearch.action.admin.indices.get.GetIndexResponse;
 import org.elasticsearch.action.admin.indices.mapping.put.PutMappingRequest;
 import org.elasticsearch.action.admin.indices.mapping.put.PutMappingResponse;
 import org.elasticsearch.action.admin.indices.open.OpenIndexRequest;
@@ -59,6 +60,29 @@ public final class IndicesClient {
 
     IndicesClient(RestHighLevelClient restHighLevelClient) {
         this.restHighLevelClient = restHighLevelClient;
+    }
+
+    /**
+     * Gets an index using the Get Index API
+     * <p>
+     * See <a href="https://www.elastic.co/guide/en/elasticsearch/reference/current/indices-get-index.html">
+     * Get Index API on elastic.co</a>
+     */
+    public GetIndexResponse get(GetIndexRequest getIndexRequest, Header... headers) throws IOException {
+        return restHighLevelClient.performRequestAndParseEntity(getIndexRequest, Request::getIndex, GetIndexResponse::fromXContent,
+            emptySet(), headers);
+    }
+
+    /**
+     * Asynchronously get an index using the Get Index API
+     * <p>
+     * See <a href="https://www.elastic.co/guide/en/elasticsearch/reference/current/indices-get-index.html">
+     * Get Index API on elastic.co</a>
+     */
+    public void getAsync(GetIndexRequest getIndexRequest, ActionListener<GetIndexResponse> listener, Header... headers) {
+        restHighLevelClient.performRequestAsyncAndParseEntity(getIndexRequest, Request::getIndex, GetIndexResponse::fromXContent,
+            listener, emptySet(), headers);
+
     }
 
     /**

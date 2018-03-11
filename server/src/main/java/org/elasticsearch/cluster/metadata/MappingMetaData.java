@@ -29,12 +29,15 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentHelper;
+import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.index.mapper.DateFieldMapper;
 import org.elasticsearch.index.mapper.DocumentMapper;
 
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.Map;
 
+import static org.elasticsearch.common.xcontent.XContentParserUtils.ensureExpectedToken;
 import static org.elasticsearch.common.xcontent.support.XContentMapValues.nodeBooleanValue;
 
 /**
@@ -150,6 +153,20 @@ public class MappingMetaData extends AbstractDiffable<MappingMetaData> {
 
     public boolean hasParentField() {
         return hasParentField;
+    }
+
+    public static MappingMetaData fromXContent(XContentParser parser) throws IOException {
+        ensureExpectedToken(XContentParser.Token.FIELD_NAME, parser.currentToken(), parser::getTokenLocation);
+        String mappingType = parser.currentName();
+
+        Map<String, Object> mappings = new HashMap<>();
+        XContentParser.Token token = parser.nextToken();
+        if (token == XContentParser.Token.START_OBJECT) {
+            mappings = parser.map();
+        } else {
+            parser.skipChildren();
+        }
+        return new MappingMetaData(mappingType, mappings);
     }
 
     /**

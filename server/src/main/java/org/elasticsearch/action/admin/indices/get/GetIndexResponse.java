@@ -23,20 +23,28 @@ import com.carrotsearch.hppc.cursors.ObjectObjectCursor;
 import org.elasticsearch.action.ActionResponse;
 import org.elasticsearch.cluster.metadata.AliasMetaData;
 import org.elasticsearch.cluster.metadata.MappingMetaData;
+import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.collect.ImmutableOpenMap;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.xcontent.XContentParser;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import static org.elasticsearch.common.xcontent.XContentParserUtils.ensureExpectedToken;
+
 /**
  * A response for a delete index action.
  */
 public class GetIndexResponse extends ActionResponse {
+
+    private static final ParseField ALIASES = new ParseField("aliases");
+    private static final ParseField MAPPINGS = new ParseField("mappings");
+    private static final ParseField SETTINGS = new ParseField("settings");
 
     private ImmutableOpenMap<String, ImmutableOpenMap<String, MappingMetaData>> mappings = ImmutableOpenMap.of();
     private ImmutableOpenMap<String, List<AliasMetaData>> aliases = ImmutableOpenMap.of();
@@ -156,5 +164,63 @@ public class GetIndexResponse extends ActionResponse {
             out.writeString(indexEntry.key);
             Settings.writeSettingsToStream(indexEntry.value, out);
         }
+    }
+
+    public static GetIndexResponse fromXContent(XContentParser parser) throws IOException {
+        ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.nextToken(), parser::getTokenLocation);
+        parser.nextToken();
+
+        List<String> indices = new ArrayList<>();
+        ImmutableOpenMap.Builder<String, ImmutableOpenMap<String, MappingMetaData>> mappingsBuilder = ImmutableOpenMap.builder();
+        ImmutableOpenMap.Builder<String, Settings> settingsBuilder = ImmutableOpenMap.builder();
+        ImmutableOpenMap.Builder<String, List<AliasMetaData>> aliasesBuilder = ImmutableOpenMap.builder();
+
+        ensureExpectedToken(XContentParser.Token.FIELD_NAME, parser.currentToken(), parser::getTokenLocation);
+        String indexName = parser.currentName();
+
+        if (indexName == null) {
+            return new GetIndexResponse(indices.toArray(new String[indices.size()]), mappingsBuilder.build(),
+                aliasesBuilder.build(), settingsBuilder.build());
+        }
+
+        for (XContentParser.Token token = parser.nextToken(); token != XContentParser.Token.END_OBJECT; token = parser.nextToken()) {
+            if (token == XContentParser.Token.FIELD_NAME) {
+                indexName = parser.currentName();
+            } else {
+                indices.add(indexName);
+                String currentFieldName = parser.currentName();
+                while ((token = parser.nextToken()) != XContentParser.Token.END_OBJECT) {
+                    if (token == XContentParser.Token.FIELD_NAME) {
+                        currentFieldName = parser.currentName();
+                    }
+                    if (token == XContentParser.Token.START_OBJECT) {
+                        if (SETTINGS.match(currentFieldName, parser.getDeprecationHandler())) {
+                            Settings settings = Settings.fromXContent(parser);
+                            settingsBuilder.put(indexName, settings);
+                        } else if (MAPPINGS.match(currentFieldName, parser.getDeprecationHandler())) {
+                            ImmutableOpenMap.Builder<String, MappingMetaData> mappingsWithTypeBuilder = ImmutableOpenMap.builder();
+                            while ((parser.nextToken()) != XContentParser.Token.END_OBJECT) {
+                                String mappingType = parser.currentName();
+                                MappingMetaData mappingMetaData = MappingMetaData.fromXContent(parser);
+                                mappingsWithTypeBuilder.put(mappingType, mappingMetaData);
+                            }
+                            mappingsBuilder.put(indexName, mappingsWithTypeBuilder.build());
+                        } else if (ALIASES.match(currentFieldName, parser.getDeprecationHandler())) {
+                            List<AliasMetaData> aliasMetaDataList = new ArrayList<>();
+                            while ((parser.nextToken()) != XContentParser.Token.END_OBJECT) {
+                                AliasMetaData aliasMetaData = AliasMetaData.Builder.fromXContent(parser);
+                                aliasMetaDataList.add(aliasMetaData);
+                            }
+                            aliasesBuilder.put(indexName, aliasMetaDataList);
+                        } else {
+                            parser.skipChildren();
+                        }
+                    }
+                }
+            }
+        }
+
+        return new GetIndexResponse(indices.toArray(new String[indices.size()]), mappingsBuilder.build(),
+            aliasesBuilder.build(), settingsBuilder.build());
     }
 }

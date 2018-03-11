@@ -156,6 +156,18 @@ public final class Request {
         return new Request(HttpDelete.METHOD_NAME, endpoint, parameters.getParams(), null);
     }
 
+    static Request getIndex(GetIndexRequest getIndexRequest) {
+        String endpoint = endpoint(getIndexRequest.indices());
+
+        Params parameters = Params.builder();
+        parameters.withIndicesOptions(getIndexRequest.indicesOptions());
+        parameters.withHuman(getIndexRequest.humanReadable());
+        parameters.withLocal(getIndexRequest.local());
+        parameters.withIncludeDefaults(getIndexRequest.includeDefaults());
+
+        return new Request(HttpGet.METHOD_NAME, endpoint, parameters.getParams(), null);
+    }
+
     static Request openIndex(OpenIndexRequest openIndexRequest) {
         String endpoint = endpoint(openIndexRequest.indices(), "_open");
 

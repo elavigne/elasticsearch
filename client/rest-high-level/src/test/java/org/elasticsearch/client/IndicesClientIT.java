@@ -37,6 +37,7 @@ import org.elasticsearch.action.admin.indices.delete.DeleteIndexResponse;
 import org.elasticsearch.action.admin.indices.flush.FlushRequest;
 import org.elasticsearch.action.admin.indices.flush.FlushResponse;
 import org.elasticsearch.action.admin.indices.get.GetIndexRequest;
+import org.elasticsearch.action.admin.indices.get.GetIndexResponse;
 import org.elasticsearch.action.admin.indices.mapping.put.PutMappingRequest;
 import org.elasticsearch.action.admin.indices.mapping.put.PutMappingResponse;
 import org.elasticsearch.action.admin.indices.open.OpenIndexRequest;
@@ -52,6 +53,9 @@ import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.action.support.WriteRequest;
 import org.elasticsearch.action.support.broadcast.BroadcastResponse;
+import org.elasticsearch.cluster.metadata.AliasMetaData;
+import org.elasticsearch.cluster.metadata.MappingMetaData;
+import org.elasticsearch.common.collect.ImmutableOpenMap;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
@@ -59,15 +63,23 @@ import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.json.JsonXContent;
 import org.elasticsearch.common.xcontent.support.XContentMapValues;
+import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.rest.RestStatus;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
 import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_NUMBER_OF_REPLICAS;
 import static org.hamcrest.CoreMatchers.hasItem;
+import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.instanceOf;
+import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 
 public class IndicesClientIT extends ESRestHighLevelClientTestCase {
 
@@ -226,6 +238,112 @@ public class IndicesClientIT extends ESRestHighLevelClientTestCase {
                     () -> execute(deleteIndexRequest, highLevelClient().indices()::delete, highLevelClient().indices()::deleteAsync));
             assertEquals(RestStatus.NOT_FOUND, exception.status());
         }
+    }
+
+    public void testGetIndex() throws IOException {
+        // Setup test indices
+        String indexName1 = "test_get_index1";
+        String indexName2 = "test_get_index2";
+        String index1MappingType = "type_name";
+        String index2MappingType = "other_type";
+        String alias1Name = "alias1";
+        String alias2Name = "alias2";
+
+        XContentBuilder mappingBuilder1 = JsonXContent.contentBuilder();
+        mappingBuilder1.startObject().startObject("properties");
+        mappingBuilder1.startObject("foo").field("type", "keyword").endObject();
+        mappingBuilder1.endObject().endObject();
+
+        XContentBuilder mappingBuilder2 = JsonXContent.contentBuilder();
+        mappingBuilder2.startObject().startObject("properties");
+        mappingBuilder2.startObject("bar").field("type", "text").endObject();
+        mappingBuilder2.endObject().endObject();
+
+        highLevelClient().indices().create(new CreateIndexRequest(indexName1)
+            .alias(new Alias(alias1Name))
+            .alias(new Alias(alias2Name).routing("1").filter(QueryBuilders.termQuery("field", "filter")))
+            .mapping(index1MappingType, mappingBuilder1)
+        );
+
+        highLevelClient().indices().create(new CreateIndexRequest(indexName2)
+            .mapping(index2MappingType, mappingBuilder2)
+        );
+
+        {
+            // Verify that all settings/aliases/mappings are properly retrieved for all indices
+            GetIndexRequest getIndexRequest = new GetIndexRequest().indices("test_get_index*").humanReadable(true);
+            GetIndexResponse getIndexResponse = execute(getIndexRequest, highLevelClient().indices()::get,
+                highLevelClient().indices()::getAsync);
+
+            // Verify that SETTINGS are part of the response
+            assertEquals(getIndexResponse.getSettings().size(), 2);
+
+            Settings index1Settings = getIndexResponse.getSettings().get(indexName1);
+            assertThat(index1Settings.get("index.provided_name"), is(indexName1));
+            assertThat(index1Settings.get("index.number_of_replicas"), is("1"));
+            assertThat(index1Settings.get("index.version.created_string"), is(notNullValue())); // check human readable
+
+            Settings index2Settings = getIndexResponse.getSettings().get(indexName2);
+            assertThat(index2Settings.get("index.provided_name"), is(indexName2));
+            assertThat(index1Settings.get("index.uuid"), is(notNullValue()));
+            assertThat(index1Settings.get("index.uuid"), is(not(index2Settings.get("index.uuid"))));
+
+            // Verify that ALIASES are part of the response
+            assertEquals(getIndexResponse.getAliases().size(), 2);
+            List<AliasMetaData> index1Aliases = getIndexResponse.getAliases().get(indexName1);
+            List<AliasMetaData> index2Aliases = getIndexResponse.getAliases().get(indexName2);
+            assertThat(index1Aliases.size(), is(2));
+            assertThat(index2Aliases.isEmpty(), is(true));
+
+            AliasMetaData alias1 = index1Aliases.stream().filter(a -> a.alias().equals(alias1Name))
+                .findFirst().orElse(null);
+            assertThat(alias1, is(notNullValue()));
+            assertThat(alias1.filter(), is(nullValue()));
+            assertThat(alias1.searchRouting(), is(nullValue()));
+            assertThat(alias1.indexRouting(), is(nullValue()));
+
+            AliasMetaData alias2 = index1Aliases.stream().filter(a -> a.alias().equals(alias2Name))
+                .findFirst().orElse(null);
+            assertThat(alias2, is(notNullValue()));
+            assertThat(alias2.filter(), is(notNullValue()));
+            assertThat(alias2.searchRouting(), is("1"));
+            assertThat(alias2.indexRouting(), is("1"));
+
+            // Verify that MAPPINGS are part of the response
+            assertEquals(getIndexResponse.getMappings().size(), 2);
+            MappingMetaData index1Mappings = getIndexResponse.getMappings().get(indexName1)
+                .getOrDefault(index1MappingType, null);
+            assertThat(index1Mappings, is(notNullValue()));
+            assertThat(index1Mappings.source().toString(),
+                is("{\"properties\":{\"foo\":{\"type\":\"keyword\"}}}"));
+
+            MappingMetaData index2Mappings = getIndexResponse.getMappings().get(indexName2)
+                .getOrDefault(index2MappingType, null);
+            assertThat(index2Mappings, is(notNullValue()));
+            assertThat(index2Mappings.source().toString(),
+                is("{\"properties\":{\"bar\":{\"type\":\"text\"}}}"));
+        }
+
+        {
+            // Verify the response when no indices are matched
+            GetIndexRequest getIndexRequest = new GetIndexRequest().indices("nada");
+            try {
+                execute(getIndexRequest, highLevelClient().indices()::get, highLevelClient().indices()::getAsync);
+                fail("Request should have failed with 'index_not_found_exception'");
+            } catch (Exception e) {
+                assertThat(e, instanceOf(ElasticsearchStatusException.class));
+            }
+        }
+
+//        {
+//            // TODO: Verify multiple features are being respected
+//            GetIndexRequest getIndexRequest = new GetIndexRequest().indices(indexName1).features(GetIndexRequest.Feature.SETTINGS, GetIndexRequest.Feature.ALIASES);
+//            GetIndexResponse getIndexResponse = highLevelClient().indices().get(getIndexRequest);
+//            assertThat(getIndexResponse.indices().length, is(1));
+//            assertThat(getIndexResponse.aliases().size(), is(1));
+//            assertThat(getIndexResponse.settings().size(), is(1));
+//            assertThat(getIndexResponse.mappings().isEmpty(), is(true));
+//        }
     }
 
     @SuppressWarnings("unchecked")
